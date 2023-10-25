@@ -102,7 +102,7 @@ samtools view -S -b ${sam_file} > ${bam_file}
 samtools sort ${bam_file} -o ${sorted_bam}
 samtools index ${sorted_bam} ${indexed_bam}
 jgi_summarize_bam_contig_depths --outputDepth ${readmapping_of}/metabat2_depth.txt ${sorted_bam}
-awk '{{print $1\"\t\"$2}}' ${readmapping_of}/covstats.tsv | grep -v '^#' > ${readmapping_of}/maxbin2_abundance.txt
+awk '{print $1\"\t\"$2}' ${readmapping_of}/covstats.tsv | grep -v '^#' > ${readmapping_of}/maxbin2_abundance.txt
 
 
 
@@ -116,43 +116,56 @@ concoct_folder="${multibinners_of}/concoct"
 maxbin_folder="${multibinners_of}/maxbin2"
 metabat_folder="${multibinners_of}/metabat2"
 
-mkdir -p ${concoct_folder} ${maxbin_folder} ${metabat_folder}
+log_concoct="${concoct_folder}/log.out"
+log_maxbin="${maxbin_folder}/log.out"
+log_metabat="${metabat_folder}/log.out"
 
-print("Executing Concoct...")
+mkdir -p ${concoct_folder} ${maxbin_folder} ${metabat_folder}
 
 mkdir -p "${concoct_folder}/bins"
 cut_up_fasta.py ${metaspades_of}/contigs.fasta -c 10000 -o 0 --merge_last -b ${concoct_folder}/contigs_10K.bed > ${concoct_folder}/contigs_10K.fa
-concoct_coverage_table.py {concoct_folder}/contigs_10K.bed {input.folder_readmap}/read_mapping_sorted.bam > {concoct_folder}/coverage_table.tsv
-concoct --composition_file {concoct_folder}/contigs_10K.fa --coverage_file {concoct_folder}/coverage_table.tsv -b {concoct_folder}/ >> {log} 2>&1
-merge_cutup_clustering.py {concoct_folder}/clustering_gt1000.csv > {concoct_folder}/clustering_merged.csv")
-extract_fasta_bins.py {input.contig_path}/contigs.fasta {concoct_folder}/clustering_merged.csv --output_path {concoct_folder}/bins")
-rename_bins(
-            folder = os.path.join(concoct_folder, "bins"), 
-            extension = "fa", 
-            binner = "concoct"
-        )
+concoct_coverage_table.py ${concoct_folder}/contigs_10K.bed ${sorted_bam} > ${concoct_folder}/coverage_table.tsv
+concoct --composition_file ${concoct_folder}/contigs_10K.fa --coverage_file ${concoct_folder}/coverage_table.tsv -b {concoct_folder}/ >> ${log_concoct} 2>&1
+merge_cutup_clustering.py ${concoct_folder}/clustering_gt1000.csv > ${concoct_folder}/clustering_merged.csv
+extract_fasta_bins.py ${metaspades_of}/contigs.fasta ${concoct_folder}/clustering_merged.csv --output_path ${concoct_folder}/bins
 
-        print("Executing MaxBin2...")
-        maxbin_folder=os.path.join(output.folder, "maxbin2")
-        shell("mkdir -p {maxbin_folder}/bins")
-        shell("run_MaxBin.pl -contig {input.contig_path}/contigs.fasta -abund {input.folder_readmap}/maxbin2_abundance.txt -thread {threads} -out {maxbin_folder}/output >> {log} 2>&1")
-        shell("mv {maxbin_folder}/*.fasta {maxbin_folder}/bins/")
-        rename_bins(
-            folder = os.path.join(maxbin_folder, "bins"), 
-            extension = "fasta", 
-            binner = "maxbin2"
-        )
 
-        print("Executing MetaBat2...")
-        metabat_folder=os.path.join(output.folder, "metabat2")
-        shell("mkdir -p {metabat_folder}/bins")  
-        shell("metabat2 --inFile {input.contig_path}/contigs.fasta --abdFile {input.folder_readmap}/metabat2_depth.txt -o {metabat_folder}/output >> {log} 2>&1")
-        shell("mv {metabat_folder}/*.fa {metabat_folder}/bins/")
-        rename_bins(
-            folder = os.path.join(metabat_folder, "bins"), 
-            extension = "fasta", 
-            binner = "metabat2"
-        )
+ 
+mkdir -p ${maxbin_folder}/bins
+run_MaxBin.pl -contig ${metaspades_of}/contigs.fasta -abund ${readmapping_of}/maxbin2_abundance.txt -thread ${threads_deborah} -out ${maxbin_folder}/output >> ${log_maxbin} 2>&1
+mv ${maxbin_folder}/*.fasta {maxbin_folder}/bins/
+
+
+
+mkdir -p "${metabat_folder}/bins"
+metabat2 --inFile ${metaspades_of}/contigs.fasta --abdFile ${readmapping_of}/metabat2_depth.txt -o ${metabat_folder}/output >> ${log_metabat} 2>&1
+mv ${metabat_folder}/*.fa ${metabat_folder}/bins/
+
+
+#######################
+###### DASTOOL ########
+#######################
+
+
+dastool_of="${output_folder}/dastool"
+mkdir -p "$dastool_of"
+
+
+Fasta_to_Contig2Bin.sh -i ${multibinners_of}/concoct/bins -e fasta > ${dastool_of}/concoct_dastool.tsv
+Fasta_to_Contig2Bin.sh -i ${multibinners_of}/maxbin2/bins -e fasta > ${dastool_of}/maxbin2_dastool.tsv
+Fasta_to_Contig2Bin.sh -i ${multibinners_of}/metabat2/bins -e fasta > ${dastool_of}/metabat2_dastool.tsv
+-i {output.folder}/concoct_dastool.tsv,{output.folder}/maxbin2_dastool.tsv,${dastool_of}/metabat2_dastool.tsv \
+            -l concoct,maxbin2,metabat2 \
+            -c {input.contig_path}/contigs.fasta \
+            -o {output.folder}/das_tool \
+            --write_bin_evals \
+            --write_bins \
+            --threads ${threads_deborah} \
+            --score_threshold 0.6 \
+            --search_engine diamond
+        cd ${dastool_of} && mv das_tool_DASTool_bins bins
+
+
 
 
 
