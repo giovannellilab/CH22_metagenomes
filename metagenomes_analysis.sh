@@ -56,3 +56,103 @@ kaiju -v -t ${kaiju_db}/nodes.dmp -f ${kaiju_db}/kaiju_db_refseq.fmi \
     -z ${threads_deborah} \
     -i ${fastp_r1} -j ${fastp_r2} \
     -o ${kaiju_of}
+
+
+#######################
+####### ASSEMBLY ######
+#######################
+
+
+metaspades_of="${output_folder}/metaspades"
+mkdir -p $metaspades_of
+
+
+spades.py --meta --only-assembler -t ${threads_deborah}  -1 ${fastp_r1} -2 ${fastp_r2} -o ${metaspades_of}
+    
+
+#######################
+##### READMAPPING #####
+#######################
+
+
+readmapping_of="${output_folder}/readmapping"
+mkdir -p "$readmapping_of/stats"
+
+sam_file="${readmapping_of}/read_mapping.sam"
+bam_file="${readmapping_of}/read_mapping.bam"
+sorted_bam="${readmapping_of}/read_mapping_sorted.bam"
+indexed_bam="${readmapping_of}/read_mapping_sorted.bam.bai"
+
+bbmap.sh ${threads_deborah} ref=${metaspades_of}/contigs.fasta \
+ in=${fastp_r1} in2=${fastp_r2} out=${sam_file} covstats=${readmapping_of}/covstats.tsv nodisk \
+ bhist=${readmapping_of}/stats/base_composition_by_pos_hist.txt \
+ qhist=${readmapping_of}/stats/quality_by_pos_hist.txt \
+ aqhist=${readmapping_of}/stats/average_read_quality_hist.txt \
+ lhist=${readmapping_of}/stats/read_length_hist.txt \
+ ihist=${readmapping_of}/stats/inserted_size_hist.txt \
+ ehist=${readmapping_of}/stats/error_per_read_hist.txt \
+ qahist=${readmapping_of}/stats/quality_accuracy_hist.txt \
+ indelhist=${readmapping_of}/stats/indel_length_hist.txt \
+ mhist=${readmapping_of}/stats/match_sub_del_ins_rates_by_location.txt \
+ gchist=${readmapping_of}/stats/gc_content_hist.txt \
+ idhist=${readmapping_of}/stats/read_count_vs_perc_identity_hist.txt \
+ scafstats=${readmapping_of}/stats/reads_mapped_to_scaffold.txt
+
+samtools view -S -b ${sam_file} > ${bam_file}
+samtools sort ${bam_file} -o ${sorted_bam}
+samtools index ${sorted_bam} ${indexed_bam}
+jgi_summarize_bam_contig_depths --outputDepth ${readmapping_of}/metabat2_depth.txt ${sorted_bam}
+awk '{{print $1\"\t\"$2}}' ${readmapping_of}/covstats.tsv | grep -v '^#' > ${readmapping_of}/maxbin2_abundance.txt
+
+
+
+#######################
+#### MULTIBINNERS #####
+#######################  
+
+multibinners_of="${output_folder}/multibinners"
+
+concoct_folder="${multibinners_of}/concoct"
+maxbin_folder="${multibinners_of}/maxbin2"
+metabat_folder="${multibinners_of}/metabat2"
+
+mkdir -p ${concoct_folder} ${maxbin_folder} ${metabat_folder}
+
+print("Executing Concoct...")
+
+mkdir -p "${concoct_folder}/bins"
+cut_up_fasta.py ${metaspades_of}/contigs.fasta -c 10000 -o 0 --merge_last -b ${concoct_folder}/contigs_10K.bed > ${concoct_folder}/contigs_10K.fa
+concoct_coverage_table.py {concoct_folder}/contigs_10K.bed {input.folder_readmap}/read_mapping_sorted.bam > {concoct_folder}/coverage_table.tsv
+concoct --composition_file {concoct_folder}/contigs_10K.fa --coverage_file {concoct_folder}/coverage_table.tsv -b {concoct_folder}/ >> {log} 2>&1
+merge_cutup_clustering.py {concoct_folder}/clustering_gt1000.csv > {concoct_folder}/clustering_merged.csv")
+extract_fasta_bins.py {input.contig_path}/contigs.fasta {concoct_folder}/clustering_merged.csv --output_path {concoct_folder}/bins")
+rename_bins(
+            folder = os.path.join(concoct_folder, "bins"), 
+            extension = "fa", 
+            binner = "concoct"
+        )
+
+        print("Executing MaxBin2...")
+        maxbin_folder=os.path.join(output.folder, "maxbin2")
+        shell("mkdir -p {maxbin_folder}/bins")
+        shell("run_MaxBin.pl -contig {input.contig_path}/contigs.fasta -abund {input.folder_readmap}/maxbin2_abundance.txt -thread {threads} -out {maxbin_folder}/output >> {log} 2>&1")
+        shell("mv {maxbin_folder}/*.fasta {maxbin_folder}/bins/")
+        rename_bins(
+            folder = os.path.join(maxbin_folder, "bins"), 
+            extension = "fasta", 
+            binner = "maxbin2"
+        )
+
+        print("Executing MetaBat2...")
+        metabat_folder=os.path.join(output.folder, "metabat2")
+        shell("mkdir -p {metabat_folder}/bins")  
+        shell("metabat2 --inFile {input.contig_path}/contigs.fasta --abdFile {input.folder_readmap}/metabat2_depth.txt -o {metabat_folder}/output >> {log} 2>&1")
+        shell("mv {metabat_folder}/*.fa {metabat_folder}/bins/")
+        rename_bins(
+            folder = os.path.join(metabat_folder, "bins"), 
+            extension = "fasta", 
+            binner = "metabat2"
+        )
+
+
+
